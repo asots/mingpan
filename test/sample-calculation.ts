@@ -3,8 +3,10 @@
  *
  * 样例数据：1992-04-12 07:30:00 男
  *
- * 期望八字：年柱壬申 月柱甲辰 日柱丁酉 時柱癸卯
- * 期望紫微：命宫乙未-廉贞(平)天府(廟)，四化：化祿天梁 化權紫微 化科左輔 化忌武曲
+ * 期望八字：年柱壬申 月柱甲辰 日柱戊午 時柱丙辰
+ * 期望紫微：命宫壬子-巨門(旺)，四化：化祿天梁 化權紫微 化科左輔 化忌武曲
+ * 
+ * 注意：此文件為手動測試腳本，正式測試請使用 vitest：npm test
  */
 
 import { BaziService } from '../src/services/bazi/BaziService';
@@ -54,7 +56,7 @@ async function testCalculations() {
     console.log(`  時柱：${chart.hour.stem}${chart.hour.branch}`);
     console.log(`  日主：${chart.day.stem}`);
 
-    const expected = { year: '壬申', month: '甲辰', day: '丁酉', hour: '癸卯' };
+    const expected = { year: '壬申', month: '甲辰', day: '戊午', hour: '丙辰' };
     const actual = {
       year: `${chart.year.stem}${chart.year.branch}`,
       month: `${chart.month.stem}${chart.month.branch}`,
@@ -121,9 +123,9 @@ async function testCalculations() {
                        '迁移', '仆役', '官禄', '田宅', '福德', '父母'];
 
   const expectedPalaces: Record<string, string> = {
-    '命宫': '乙未', '兄弟': '甲午', '夫妻': '癸巳', '子女': '壬辰',
-    '财帛': '辛卯', '疾厄': '庚寅', '迁移': '己丑', '仆役': '庚子',
-    '官禄': '己亥', '田宅': '戊戌', '福德': '丁酉', '父母': '丙申'
+    '命宫': '壬子', '兄弟': '辛亥', '夫妻': '庚戌', '子女': '己酉',
+    '财帛': '戊申', '疾厄': '丁未', '迁移': '丙午', '仆役': '乙巳',
+    '官禄': '甲辰', '田宅': '癸卯', '福德': '壬寅', '父母': '癸丑'
   };
 
   let allPalacesMatch = true;

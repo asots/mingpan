@@ -32,3 +32,6 @@ test/results/
 # Temporary files
 *.tmp
 *.temp
+
+.venv/
+test/

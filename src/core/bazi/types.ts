@@ -83,7 +83,6 @@ export interface BaziCoreInput {
   minute?: number;
   gender?: 'male' | 'female';
   isLunar?: boolean;
-  timezone?: string;
   longitude?: number;
 }
 

@@ -20,8 +20,15 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Lunar } from "lunar-javascript";
 
+import { BEIJING_TZ, normalizeBirthDateTime } from "./utils/timeNormalization";
 import { BaziService } from "./services/bazi/BaziService";
 import { ZiweiService } from "./services/ziwei/ZiweiService";
+import { LiuyaoService } from "./services/liuyao/LiuyaoService";
+import { renderLiuyaoText } from "./output/liuyaoTextRenderer";
+import { MeihuaService } from "./services/meihua/MeihuaService";
+import { renderMeihuaText } from "./output/meihuaTextRenderer";
+import { DaliurenService } from "./services/daliuren/DaliurenService";
+import { renderDaliurenText } from "./output/daliurenTextRenderer";
 import { LiuNianCalculator } from "./services/bazi/calculators/LiuNianCalculator";
 import { DaYunCalculator } from "./services/bazi/calculators/DaYunCalculator";
 import { LuckCycleCalculator } from "./services/bazi/calculators/LuckCycleCalculator";
@@ -49,6 +56,15 @@ import { MutagenCore } from "./core/ziwei/MutagenCore";
 
 const logger = new Logger("mingpan");
 
+// ============================================
+// Timezone Configuration
+// ============================================
+// Force deterministic timezone behavior (Beijing Time) across environments.
+// This ensures lunar-javascript and Date operations behave consistently
+// regardless of the host machine's timezone setting.
+// TODO: Remove when multi-timezone support is implemented (M4 milestone)
+process.env.TZ = BEIJING_TZ;
+
 // Helper to avoid TypeScript's excessively deep type instantiation error
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function schemaToJson(schema: any): Record<string, unknown> {
@@ -59,6 +75,11 @@ function schemaToJson(schema: any): Record<string, unknown> {
 // Zod Schemas for Tool Inputs
 // ============================================
 
+// isLunar field schema (reusable)
+const isLunarField = z.boolean().optional().default(false).describe(
+  "Whether the input date is in lunar calendar (農曆). If true, will be converted to solar calendar internally."
+);
+
 // Base birth info schema
 const BaseBirthInfoSchema = z.object({
   year: z.number().int().min(1900).max(2100).describe("Birth year (e.g., 1990)"),
@@ -68,8 +89,42 @@ const BaseBirthInfoSchema = z.object({
   minute: z.number().int().min(0).max(59).optional().default(0).describe("Birth minute (0-59)"),
   gender: z.enum(["male", "female"]).describe("Gender for fortune direction calculation"),
   longitude: z.number().min(-180).max(180).optional().describe("Birth location longitude for true solar time adjustment"),
+  isLunar: isLunarField,
   name: z.string().optional().describe("Subject name (optional)"),
 });
+
+/**
+ * Normalize birth info: handle lunar-to-solar conversion
+ * Call this at the start of each handler to get consistent, normalized values
+ */
+function normalizeBirthInfo<T extends {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute?: number;
+  isLunar?: boolean;
+}>(input: T): T & { _isLunarInput: boolean } {
+  const normalized = normalizeBirthDateTime({
+    year: input.year,
+    month: input.month,
+    day: input.day,
+    hour: input.hour,
+    minute: input.minute,
+    isLunar: input.isLunar,
+  });
+  
+  return {
+    ...input,
+    year: normalized.year,
+    month: normalized.month,
+    day: normalized.day,
+    hour: normalized.hour,
+    minute: normalized.minute,
+    isLunar: false,  // After normalization, always use solar calendar
+    _isLunarInput: normalized.isLunarInput,
+  };
+}
 
 const BaziCalculateSchema = z.object({
   year: z.number().int().min(1900).max(2100).describe("Birth year (e.g., 1990)"),
@@ -79,7 +134,7 @@ const BaziCalculateSchema = z.object({
   minute: z.number().int().min(0).max(59).optional().default(0).describe("Birth minute (0-59)"),
   gender: z.enum(["male", "female"]).optional().default("male").describe("Gender for DaYun calculation direction"),
   longitude: z.number().min(-180).max(180).optional().describe("Birth location longitude for true solar time adjustment"),
-  isLunar: z.boolean().optional().default(false).describe("Whether the birth date is in lunar calendar"),
+  isLunar: isLunarField,
   detail: z.enum(["simple", "standard", "detailed"]).optional().default("standard").describe("Output detail level"),
   includeAnalysis: z.boolean().optional().default(true).describe("Include strength and pattern analysis"),
   includeDaYun: z.boolean().optional().default(true).describe("Include decade fortune (大運)"),
@@ -93,7 +148,7 @@ const ZiweiCalculateSchema = z.object({
   hour: z.number().int().min(0).max(23).describe("Birth hour in 24-hour format (0-23)"),
   minute: z.number().int().min(0).max(59).optional().default(0).describe("Birth minute (0-59)"),
   gender: z.enum(["male", "female"]).describe("Gender (required for ZiWei calculation)"),
-  isLunar: z.boolean().optional().default(false).describe("Whether the birth date is in lunar calendar"),
+  isLunar: isLunarField,
   detail: z.enum(["simple", "standard", "detailed"]).optional().default("standard").describe("Output detail level"),
   targetYear: z.number().int().optional().describe("Calculate yearly fortune for this specific year"),
   includeDecades: z.boolean().optional().default(true).describe("Include decade fortune (大限)"),
@@ -108,10 +163,60 @@ const CombinedCalculateSchema = z.object({
   minute: z.number().int().min(0).max(59).optional().default(0).describe("Birth minute (0-59)"),
   gender: z.enum(["male", "female"]).describe("Gender (required for both calculations)"),
   longitude: z.number().min(-180).max(180).optional().describe("Birth location longitude for true solar time adjustment"),
-  isLunar: z.boolean().optional().default(false).describe("Whether the birth date is in lunar calendar"),
+  isLunar: isLunarField,
   detail: z.enum(["simple", "standard", "detailed"]).optional().default("standard").describe("Output detail level"),
   targetYear: z.number().int().optional().describe("Calculate yearly fortune for this specific year"),
   systems: z.array(z.enum(["bazi", "ziwei"])).optional().default(["bazi", "ziwei"]).describe("Which systems to calculate"),
+});
+
+// ============================================
+// 六爻 Schema
+// ============================================
+
+const LiuyaoBasicSchema = z.object({
+  yaoValues: z.tuple([
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+    z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9)]),
+  ]).describe("六個爻值（自下而上，初爻到上爻）。6=老陰(動), 7=少陽(靜), 8=少陰(靜), 9=老陽(動)"),
+  year: z.number().int().min(1900).max(2100).describe("起卦年份（公曆）"),
+  month: z.number().int().min(1).max(12).describe("起卦月份（1-12）"),
+  day: z.number().int().min(1).max(31).describe("起卦日期（1-31）"),
+  hour: z.number().int().min(0).max(23).describe("起卦時辰（0-23）"),
+  isLunar: isLunarField,
+});
+
+// ============================================
+// 梅花易數 Schema
+// ============================================
+
+const MeihuaBasicSchema = z.object({
+  method: z.enum(['time', 'number']).describe("起卦方式：time=時間起卦，number=數字起卦"),
+  // time 模式參數
+  year: z.number().int().min(1900).max(2100).optional().describe("起卦年份（公曆，time 模式必填）"),
+  month: z.number().int().min(1).max(12).optional().describe("起卦月份（1-12，time 模式必填）"),
+  day: z.number().int().min(1).max(31).optional().describe("起卦日期（1-31，time 模式必填）"),
+  hour: z.number().int().min(0).max(23).optional().describe("起卦時辰（0-23，time 模式必填）"),
+  isLunar: isLunarField,
+  // number 模式參數
+  upperNumber: z.number().int().min(1).optional().describe("上卦數（number 模式必填）"),
+  lowerNumber: z.number().int().min(1).optional().describe("下卦數（number 模式必填）"),
+  yaoNumber: z.number().int().min(1).optional().describe("動爻數（可選，默認用上下卦數之和）"),
+});
+
+// ============================================
+// 大六壬 Schema
+// ============================================
+
+const DaliurenBasicSchema = z.object({
+  jieqi: z.string().describe("節氣（如：立春、雨水、驚蟄等）"),
+  lunarMonth: z.number().int().min(1).max(12).describe("農曆月份（1-12）"),
+  dayGanZhi: z.string().describe("日干支（如：甲子、乙丑等）"),
+  hourGanZhi: z.string().describe("時干支（如：甲子、乙丑等）"),
+  guirenMethod: z.union([z.literal(0), z.literal(1)]).optional().default(0).describe("貴人起法：0=標準, 1=另一種"),
 });
 
 // ============================================
@@ -184,7 +289,7 @@ const ZiweiLiuRiListSchema = BaseBirthInfoSchema.extend({
 const server = new Server(
   {
     name: "mingpan",
-    version: "0.1.1",
+    version: "0.1.2",
   },
   {
     capabilities: {
@@ -369,6 +474,75 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 用于精细的日期选择。`,
         inputSchema: schemaToJson(ZiweiLiuRiListSchema),
       },
+      {
+        name: "liuyao_basic",
+        description: `六爻排盤（基礎排盤）。
+
+輸入六個爻值和起卦時間，返回完整的六爻盤面：
+- 本卦/變卦（含卦名、卦宮、五行）
+- 六爻納甲（每爻地支及五行）
+- 六親（父母/兄弟/子孫/妻財/官鬼）
+- 六神（青龍/朱雀/勾陳/螣蛇/白虎/玄武）
+- 世應位置
+- 動爻標註
+- 日干支、月建、旬空
+
+爻值說明：
+- 6 = 老陰（動爻，陰變陽）
+- 7 = 少陽（靜爻，陽）
+- 8 = 少陰（靜爻，陰）
+- 9 = 老陽（動爻，陽變陰）
+
+輸入順序：自下而上（初爻到上爻）
+
+輸出為 Markdown 格式，便於 AI 分析解讀。`,
+        inputSchema: schemaToJson(LiuyaoBasicSchema),
+      },
+      {
+        name: "meihua_basic",
+        description: `梅花易數排盤（基礎排盤）。
+
+支持兩種起卦方式：
+1. 時間起卦（method='time'）：根據農曆年月日時起卦
+2. 數字起卦（method='number'）：根據兩個數字起卦
+
+返回完整的梅花盤面：
+- 本卦/變卦/互卦
+- 上卦/下卦（含卦象、五行）
+- 動爻位置
+- 體用分析（體卦、用卦、五行生剋關係）
+- 起卦數據詳情
+
+時間起卦算法（農曆）：
+- 上卦 = (年干支序數 + 月 + 日) % 8
+- 下卦 = (年干支序數 + 月 + 日 + 時辰序數) % 8
+- 動爻 = (年干支序數 + 月 + 日 + 時辰序數) % 6
+
+輸出為 Markdown 格式，便於 AI 分析解讀。`,
+        inputSchema: schemaToJson(MeihuaBasicSchema),
+      },
+      {
+        name: "daliuren_basic",
+        description: `大六壬排盤（基礎排盤）。
+
+大六壬是中國古老三大占卜術之一，與奇門遁甲、太乙神數並稱三式。
+
+輸入節氣、農曆月、日干支、時干支，返回完整的六壬盤面：
+- 天地盤（月將加時辰起盤）
+- 四課（日干支推演）
+- 三傳（九宗門推演：賊尅、比用、涉害、遙尅、昴星、別責、八專、伏吟、返吟）
+- 十二天將（貴人、螣蛇、朱雀、六合、勾陳、青龍、天空、白虎、太常、玄武、太陰、天后）
+- 格局判斷
+- 神煞（日馬、月馬、丁馬、華蓋、閃電）
+
+注意：
+- 需要提供節氣（如：立春、雨水、驚蟄等）
+- 日干支和時干支需要是完整的干支（如：甲子、乙丑）
+- 本工具只負責排盤，斷課解讀交給 Agent
+
+輸出為 Markdown 格式，便於 AI 分析解讀。`,
+        inputSchema: schemaToJson(DaliurenBasicSchema),
+      },
     ],
   };
 });
@@ -379,6 +553,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 const baziService = new BaziService({ debug: false });
 const ziweiService = new ZiweiService();
+const liuyaoService = new LiuyaoService();
+const meihuaService = new MeihuaService();
 
 // Helper: Calculate year stem and branch
 function getYearStemBranch(year: number): { stem: string; branch: string } {
@@ -463,16 +639,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // === Existing Chart Calculation Handlers ===
     if (name === "bazi_basic") {
       const validated = BaziCalculateSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       const result = await baziService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        minute: validated.minute,
-        gender: validated.gender,
-        longitude: validated.longitude,
-        useLunar: validated.isLunar,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        gender: normalized.gender,
+        longitude: normalized.longitude,
+        useLunar: false,  // Already converted to solar if needed
       });
 
       // If targetYear is specified, calculate LiuNian
@@ -480,7 +657,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (validated.targetYear && result.chart) {
         const liuNians = LiuNianCalculator.calculate(
           result.chart,
-          validated.year,
+          normalized.year,
           validated.targetYear,
           validated.targetYear
         );
@@ -496,9 +673,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         includeLocation: !!validated.longitude,
       };
 
-      const birthDate = new Date(validated.year, validated.month - 1, validated.day, validated.hour, validated.minute);
+      const birthDate = new Date(normalized.year, normalized.month - 1, normalized.day, normalized.hour, normalized.minute);
       const text = renderBaziText(
-        { bazi: result, gender: validated.gender, birthDate },
+        { bazi: result, gender: normalized.gender, birthDate },
         options
       );
 
@@ -514,13 +691,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_basic") {
       const validated = ZiweiCalculateSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       const result = await ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       const options: FortuneTextOptions = {
@@ -528,11 +706,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         includePersonal: false,
       };
 
-      const birthDate = new Date(validated.year, validated.month - 1, validated.day, validated.hour, validated.minute);
+      const birthDate = new Date(normalized.year, normalized.month - 1, normalized.day, normalized.hour, normalized.minute);
       const text = renderZiweiText(
         {
           ziwei: result,
-          gender: validated.gender,
+          gender: normalized.gender,
           birthDate,
           mutagen: result.mutagenInfo  // 傳入四化信息
         },
@@ -549,20 +727,102 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // === BaZi List Tool Handlers ===
+    // === 六爻工具處理器 ===
 
-    if (name === "bazi_dayun") {
-      const validated = BaziDaYunListSchema.parse(args);
-
-      // Calculate BaZi chart first
-      const result = await baziService.calculate({
+    if (name === "liuyao_basic") {
+      const validated = LiuyaoBasicSchema.parse(args);
+      
+      const result = liuyaoService.calculate({
+        yaoValues: validated.yaoValues as [6|7|8|9, 6|7|8|9, 6|7|8|9, 6|7|8|9, 6|7|8|9, 6|7|8|9],
         year: validated.year,
         month: validated.month,
         day: validated.day,
         hour: validated.hour,
-        minute: validated.minute,
-        gender: validated.gender,
-        longitude: validated.longitude,
+        isLunar: validated.isLunar,
+      });
+
+      const text = renderLiuyaoText(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text,
+          },
+        ],
+      };
+    }
+
+    // === 梅花易數工具處理器 ===
+
+    if (name === "meihua_basic") {
+      const validated = MeihuaBasicSchema.parse(args);
+      
+      const result = meihuaService.calculate({
+        method: validated.method,
+        year: validated.year,
+        month: validated.month,
+        day: validated.day,
+        hour: validated.hour,
+        isLunar: validated.isLunar,
+        upperNumber: validated.upperNumber,
+        lowerNumber: validated.lowerNumber,
+        yaoNumber: validated.yaoNumber,
+      });
+
+      const text = renderMeihuaText(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text,
+          },
+        ],
+      };
+    }
+
+    // === 大六壬工具處理器 ===
+
+    if (name === "daliuren_basic") {
+      const validated = DaliurenBasicSchema.parse(args);
+      
+      const daliurenService = new DaliurenService();
+      const result = daliurenService.calculate({
+        jieqi: validated.jieqi,
+        lunarMonth: validated.lunarMonth,
+        dayGanZhi: validated.dayGanZhi,
+        hourGanZhi: validated.hourGanZhi,
+        guirenMethod: validated.guirenMethod,
+      });
+
+      const text = renderDaliurenText(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text,
+          },
+        ],
+      };
+    }
+
+    // === BaZi List Tool Handlers ===
+
+    if (name === "bazi_dayun") {
+      const validated = BaziDaYunListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
+
+      // Calculate BaZi chart first
+      const result = await baziService.calculate({
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        gender: normalized.gender,
+        longitude: normalized.longitude,
       });
 
       if (!result.chart || !result.birthInfo) {
@@ -573,23 +833,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const daYunList = DaYunCalculator.calculate(
         result.chart,
         result.birthInfo,
-        validated.gender,
-        { startYear: validated.year, endYear: validated.year + 100 }
+        normalized.gender,
+        { startYear: normalized.year, endYear: normalized.year + 100 }
       );
 
       // Get direction and start info
-      const direction = LuckCycleCalculator.calLuckySequence(validated.gender, result.chart.year.stem) === 'forward' ? '顺行' : '逆行';
+      const direction = LuckCycleCalculator.calLuckySequence(normalized.gender, result.chart.year.stem) === 'forward' ? '顺行' : '逆行';
       const startAge = daYunList.length > 0 ? daYunList[0].startAge : 1;
-      const startYear = validated.year + startAge - 1;
+      const startYear = normalized.year + startAge - 1;
 
       const options: BaziListOptions & { direction: '顺行' | '逆行'; startAge: number; startYear: number } = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         dayMaster: result.chart.day.stem,
         yearPillar: { stem: result.chart.year.stem, branch: result.chart.year.branch },
         monthPillar: { stem: result.chart.month.stem, branch: result.chart.month.branch },
@@ -607,16 +867,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "bazi_liunian") {
       const validated = BaziLiuNianListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       // Calculate BaZi chart first
       const result = await baziService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        minute: validated.minute,
-        gender: validated.gender,
-        longitude: validated.longitude,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        gender: normalized.gender,
+        longitude: normalized.longitude,
       });
 
       if (!result.chart || !result.birthInfo) {
@@ -627,26 +888,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const daYunList = DaYunCalculator.calculate(
         result.chart,
         result.birthInfo,
-        validated.gender,
-        { startYear: validated.year, endYear: validated.year + 100 }
+        normalized.gender,
+        { startYear: normalized.year, endYear: normalized.year + 100 }
       );
 
       // Calculate LiuNian for the range
       const liuNianList = LiuNianCalculator.calculate(
         result.chart,
-        validated.year,
+        normalized.year,
         validated.startYear,
         validated.endYear
       );
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         dayMaster: result.chart.day.stem,
         yearPillar: { stem: result.chart.year.stem, branch: result.chart.year.branch },
         monthPillar: { stem: result.chart.month.stem, branch: result.chart.month.branch },
@@ -664,17 +925,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "bazi_liuyue") {
       const validated = BaziLiuYueListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
       const { year: gregorianYear, ganzhi: ganzhiYear } = parseGanzhiYear(validated.ganzhiYear);
 
       // Calculate BaZi chart first
       const result = await baziService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        minute: validated.minute,
-        gender: validated.gender,
-        longitude: validated.longitude,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        gender: normalized.gender,
+        longitude: normalized.longitude,
       });
 
       if (!result.chart || !result.birthInfo) {
@@ -688,12 +950,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const daYunList = DaYunCalculator.calculate(
         result.chart,
         result.birthInfo,
-        validated.gender,
-        { startYear: validated.year, endYear: validated.year + 100 }
+        normalized.gender,
+        { startYear: normalized.year, endYear: normalized.year + 100 }
       );
 
       // Calculate age for the target year (虛歲)
-      const targetAge = gregorianYear - validated.year + 1;
+      const targetAge = gregorianYear - normalized.year + 1;
 
       // Find current DaYun
       let currentDaYun: { stem: string; branch: string; startAge: number; endAge: number } | undefined;
@@ -710,7 +972,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Calculate current LiuNian
       const liuNianList = LiuNianCalculator.calculate(
         result.chart,
-        validated.year,
+        normalized.year,
         gregorianYear,
         gregorianYear
       );
@@ -732,23 +994,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         (result.basic?.dayMasterElement || '木') as any,
         (result.traditional?.yongShen?.yongShen || []) as any,
         {
-          year: validated.year,
-          month: validated.month,
-          day: validated.day,
-          hour: validated.hour,
-          minute: validated.minute,
+          year: normalized.year,
+          month: normalized.month,
+          day: normalized.day,
+          hour: normalized.hour,
+          minute: normalized.minute,
         },
         gregorianYear
       );
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         dayMaster: result.chart.day.stem,
         yearPillar: { stem: result.chart.year.stem, branch: result.chart.year.branch },
         monthPillar: { stem: result.chart.month.stem, branch: result.chart.month.branch },
@@ -767,18 +1029,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "bazi_liuri") {
       const validated = BaziLiuRiListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
       const { year: gregorianYear, ganzhi: ganzhiYear } = parseGanzhiYear(validated.ganzhiYear);
       const monthNum = parseGanzhiMonth(validated.ganzhiMonth);
 
       // Calculate BaZi chart first
       const result = await baziService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        minute: validated.minute,
-        gender: validated.gender,
-        longitude: validated.longitude,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        gender: normalized.gender,
+        longitude: normalized.longitude,
       });
 
       if (!result.chart || !result.birthInfo) {
@@ -793,12 +1056,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const daYunList = DaYunCalculator.calculate(
         result.chart,
         result.birthInfo,
-        validated.gender,
-        { startYear: validated.year, endYear: validated.year + 100 }
+        normalized.gender,
+        { startYear: normalized.year, endYear: normalized.year + 100 }
       );
 
       // Calculate age for the target year (虛歲)
-      const targetAge = gregorianYear - validated.year + 1;
+      const targetAge = gregorianYear - normalized.year + 1;
 
       // Find current DaYun
       let currentDaYun: { stem: string; branch: string; startAge: number; endAge: number } | undefined;
@@ -815,7 +1078,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Calculate current LiuNian
       const liuNianList = LiuNianCalculator.calculate(
         result.chart,
-        validated.year,
+        normalized.year,
         gregorianYear,
         gregorianYear
       );
@@ -854,13 +1117,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const endDate = liuRiList.length > 0 ? liuRiList[liuRiList.length - 1].date : new Date();
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         dayMaster: result.chart.day.stem,
         yearPillar: { stem: result.chart.year.stem, branch: result.chart.year.branch },
         monthPillar: { stem: result.chart.month.stem, branch: result.chart.month.branch },
@@ -885,14 +1148,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_daxian") {
       const validated = ZiweiDaXianListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       // Calculate ZiWei chart
       const result = ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       if (!result.decades || result.decades.length === 0) {
@@ -921,13 +1185,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ) || [];
 
       const options: ZiweiListOptions & { direction: '顺行' | '逆行' } = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         mingGong: mingGongPalace?.name || '命宮',
         mingGongStars,
         shenGong: shenGongPalace?.name,
@@ -944,13 +1208,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_xiaoxian") {
       const validated = ZiweiXiaoXianListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       const result = ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       if (!result.palaces) {
@@ -958,7 +1223,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const minorLimitList = ziweiService.getMinorLimitRange(
-        validated.year,
+        normalized.year,
         validated.startAge,
         validated.endAge
       );
@@ -971,7 +1236,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ) || [];
 
       const currentYear = new Date().getFullYear();
-      const currentAge = currentYear - validated.year + 1;
+      const currentAge = currentYear - normalized.year + 1;
       let currentDecade: { palaceName: string; startAge: number; endAge: number } | undefined;
       if (result.decades && result.decades.length > 0) {
         const matchedDecade = result.decades.find(
@@ -987,13 +1252,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         mingGong: mingGongPalace?.name || '命宮',
         mingGongStars,
         palaces: result.palaces,
@@ -1011,14 +1276,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_liunian") {
       const validated = ZiweiLiuNianListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       // Calculate ZiWei chart
       const result = ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       if (!result.palaces) {
@@ -1028,7 +1294,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Calculate yearly info for each year in the range
       const yearlyList = [];
       for (let year = validated.startYear; year <= validated.endYear; year++) {
-        const yearly = YearlyCalculator.calculate(year, validated.year, result.palaces);
+        const yearly = YearlyCalculator.calculate(year, normalized.year, result.palaces);
         if (yearly) {
           yearlyList.push(yearly);
         }
@@ -1043,13 +1309,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ) || [];
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         mingGong: mingGongPalace?.name || '命宮',
         mingGongStars,
         palaces: result.palaces,  // 传入完整宫位数据
@@ -1066,14 +1332,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_liuyue") {
       const validated = ZiweiLiuYueListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       // Calculate ZiWei chart
       const result = ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       // Get yearly months (农历月)
@@ -1093,7 +1360,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         (Lunar.fromYmd(validated.lunarYear, 6, 1) as any).getLeapMonth?.() : undefined;
 
       // Calculate age for the target year (虛歲)
-      const targetAge = validated.lunarYear - validated.year + 1;
+      const targetAge = validated.lunarYear - normalized.year + 1;
 
       // Find current decade (大限)
       let currentDecade: { palaceName: string; startAge: number; endAge: number } | undefined;
@@ -1111,7 +1378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Calculate current yearly (流年)
-      const yearlyInfo = YearlyCalculator.calculate(validated.lunarYear, validated.year, result.palaces!);
+      const yearlyInfo = YearlyCalculator.calculate(validated.lunarYear, normalized.year, result.palaces!);
       let currentYearly: { year: number; age: number; palaceName: string; heavenlyStem: string; earthlyBranch: string } | undefined;
       if (yearlyInfo) {
         const { stem: yearStem, branch: yearBranch } = getYearStemBranch(validated.lunarYear);
@@ -1125,7 +1392,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Calculate current minor limit (小限)
-      const minorLimitInfo = ziweiService.getMinorLimitInfo(validated.year, validated.lunarYear);
+      const minorLimitInfo = ziweiService.getMinorLimitInfo(normalized.year, validated.lunarYear);
       let currentMinorLimit: { age: number; palaceName: string; heavenlyStem: string; earthlyBranch: string } | undefined;
       if (minorLimitInfo) {
         currentMinorLimit = {
@@ -1143,13 +1410,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         mingGong: mingGongPalace?.name || '命宮',
         mingGongStars,
         palaces: result.palaces,
@@ -1169,14 +1436,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "ziwei_liuri") {
       const validated = ZiweiLiuRiListSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       // Calculate ZiWei chart
       const result = ziweiService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        gender: validated.gender,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        gender: normalized.gender,
       });
 
       // Handle leap month (negative number)
@@ -1249,7 +1517,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const monthlyPalace = monthlyInfo ? result.palaces?.[monthlyInfo.palaceIndex]?.name : undefined;
 
       // Calculate age for the target year (虛歲)
-      const targetAge = validated.lunarYear - validated.year + 1;
+      const targetAge = validated.lunarYear - normalized.year + 1;
 
       // Find current decade (大限)
       let currentDecade: { palaceName: string; startAge: number; endAge: number } | undefined;
@@ -1267,7 +1535,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Calculate current yearly (流年)
-      const yearlyInfo = YearlyCalculator.calculate(validated.lunarYear, validated.year, result.palaces!);
+      const yearlyInfo = YearlyCalculator.calculate(validated.lunarYear, normalized.year, result.palaces!);
       let currentYearly: { year: number; age: number; palaceName: string; heavenlyStem: string; earthlyBranch: string } | undefined;
       if (yearlyInfo) {
         const { stem: yearStem, branch: yearBranch } = getYearStemBranch(validated.lunarYear);
@@ -1292,7 +1560,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Calculate current minor limit (小限)
-      const minorLimitInfo = ziweiService.getMinorLimitInfo(validated.year, validated.lunarYear);
+      const minorLimitInfo = ziweiService.getMinorLimitInfo(normalized.year, validated.lunarYear);
       let currentMinorLimit: { age: number; palaceName: string; heavenlyStem: string; earthlyBranch: string } | undefined;
       if (minorLimitInfo) {
         currentMinorLimit = {
@@ -1313,13 +1581,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const options = {
-        name: validated.name,
-        birthYear: validated.year,
-        birthMonth: validated.month,
-        birthDay: validated.day,
-        birthHour: validated.hour,
-        birthMinute: validated.minute,
-        gender: validated.gender,
+        name: normalized.name,
+        birthYear: normalized.year,
+        birthMonth: normalized.month,
+        birthDay: normalized.day,
+        birthHour: normalized.hour,
+        birthMinute: normalized.minute,
+        gender: normalized.gender,
         mingGong: mingGongPalace?.name || '命宮',
         mingGongStars,
         palaces: result.palaces,
@@ -1365,7 +1633,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info("Mingpan MCP server started (v0.1.1)");
+  logger.info("Mingpan MCP server started (v0.1.2)");
 }
 
 main().catch((error) => {

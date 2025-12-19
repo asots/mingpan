@@ -19,7 +19,6 @@ export interface BaziInput {
   longitude?: number; // For true solar time adjustment
   name?: string; // Optional name for personal reference
   useLunar?: boolean; // Whether to use lunar calendar
-  timezone?: number; // Timezone offset for accurate calculations
   options?: BaziOptions;
 }
 
@@ -592,7 +591,6 @@ export interface BirthInfo {
   gender: 'male' | 'female';
   name?: string;
   isLunar?: boolean;
-  timezone?: string;
   longitude?: number;
 }
 

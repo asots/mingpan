@@ -17,7 +17,6 @@ export interface SubjectData {
   gender: 'male' | 'female';
   isLunar?: boolean;        // Use lunar calendar
   longitude?: number;       // For true solar time calculation
-  timezone?: string;        // Timezone identifier
   birthPlace?: string;      // Location name
   relationship?: string;    // Relationship to owner
   notes?: string;
