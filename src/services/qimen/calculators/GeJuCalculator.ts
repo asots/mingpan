@@ -242,10 +242,10 @@ export class GeJuCalculator {
   private static checkRuMuGeJu(gongs: Record<GongWei, GongInfo>): GeJuInfo[] {
     const results: GeJuInfo[] = [];
 
-    // 天干入墓宫位（三奇六仪）
-    // 木火土墓在戌(乾6)，金墓在丑(艮8)，水墓在辰(巽4)
+    // 天干入墓宫位（三奇六仪）- 采用传统五行墓库
+    // 木墓未(坤2)，火土墓戌(乾6)，金墓丑(艮8)，水墓辰(巽4)
     const ganMuGong: Record<string, GongWei> = {
-      '乙': 6, // 乙(木)墓在乾（戌）
+      '乙': 2, // 乙(木)墓在坤（未）
       '丙': 6, // 丙(火)墓在乾（戌）
       '丁': 6, // 丁(火)墓在乾（戌）
       '戊': 6, // 戊(土)墓在乾（戌）
@@ -279,14 +279,16 @@ export class GeJuCalculator {
   private static checkJiXingGeJu(gongs: Record<GongWei, GongInfo>): GeJuInfo[] {
     const results: GeJuInfo[] = [];
 
-    // 六仪所临刑宫
+    // 六仪所临刑宫（基于地支三刑）
+    // 六仪对应旬首：戊(甲子)、己(甲戌)、庚(甲申)、辛(甲午)、壬(甲辰)、癸(甲寅)
+    // 三刑规则：子刑卯、寅巳申三刑、丑戌未三刑、辰午酉亥自刑
     const liuYiXingGong: Record<string, GongWei> = {
-      '戊': 3, // 戊临震（卯）为击刑
-      '己': 8, // 己临艮为击刑（寅）
-      '庚': 1, // 庚临坎为击刑（子）
-      '辛': 9, // 辛临离为击刑（午）
-      '壬': 2, // 壬临坤为击刑
-      '癸': 8, // 癸临艮为击刑
+      '戊': 3, // 戊(甲子)：子刑卯 → 震3宫
+      '己': 2, // 己(甲戌)：戌刑未 → 坤2宫
+      '庚': 8, // 庚(甲申)：申刑寅 → 艮8宫
+      '辛': 9, // 辛(甲午)：午自刑 → 离9宫
+      '壬': 4, // 壬(甲辰)：辰自刑 → 巽4宫
+      '癸': 4, // 癸(甲寅)：寅刑巳 → 巽4宫
     };
 
     for (const gong of Object.values(gongs)) {
@@ -306,41 +308,42 @@ export class GeJuCalculator {
 
   /**
    * 五不遇时（凶格）
+   * 时干克日干，且阴阳属性相同（同性相克）
+   *
+   * 口诀：
+   * 甲日最怕庚午时，乙日忌见辛巳知，
+   * 丙日壬辰最难当，丁日癸卯必须防，
+   * 戊日甲寅时上忌，己日乙丑最为凶，
+   * 庚日丙子不为良，辛日丁酉时中藏，
+   * 壬日戊申时上忌，癸日己未定不昌。
    */
   private static checkWuBuYuShiGeJu(dayGan: TianGan, hourGan: TianGan): GeJuInfo[] {
     const results: GeJuInfo[] = [];
 
-    // 日干克时干为五不遇时
-    const dayKe = this.getGanKe(dayGan);
-    if (dayKe === hourGan) {
+    // 五不遇时映射：日干 → 所忌时干
+    const wuBuYuShiMap: Record<TianGan, TianGan> = {
+      '甲': '庚', // 甲日庚时（阳木被阳金克）
+      '乙': '辛', // 乙日辛时（阴木被阴金克）
+      '丙': '壬', // 丙日壬时（阳火被阳水克）
+      '丁': '癸', // 丁日癸时（阴火被阴水克）
+      '戊': '甲', // 戊日甲时（阳土被阳木克）
+      '己': '乙', // 己日乙时（阴土被阴木克）
+      '庚': '丙', // 庚日丙时（阳金被阳火克）
+      '辛': '丁', // 辛日丁时（阴金被阴火克）
+      '壬': '戊', // 壬日戊时（阳水被阳土克）
+      '癸': '己', // 癸日己时（阴水被阴土克）
+    };
+
+    if (wuBuYuShiMap[dayGan] === hourGan) {
       results.push({
         name: '五不遇时',
         type: '凶格',
-        description: `日干${dayGan}克时干${hourGan}`,
+        description: `时干${hourGan}克日干${dayGan}`,
         gongs: [],
       });
     }
 
     return results;
-  }
-
-  /**
-   * 获取天干所克
-   */
-  private static getGanKe(gan: TianGan): TianGan | null {
-    const keMap: Record<TianGan, TianGan> = {
-      '甲': '戊',
-      '乙': '己',
-      '丙': '庚',
-      '丁': '辛',
-      '戊': '壬',
-      '己': '癸',
-      '庚': '甲',
-      '辛': '乙',
-      '壬': '丙',
-      '癸': '丁',
-    };
-    return keMap[gan] || null;
   }
 
   /**
