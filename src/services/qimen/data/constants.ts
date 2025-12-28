@@ -19,13 +19,26 @@ import type {
 // ============= 从 core/qimen 重新导出 =============
 
 export {
-  // Flying rules
+  // Flying rules (飞盘式)
   LUOSHU_ORDER,
+  LUOSHU_ORDER_9,
   ZHONG_GONG_JI,
   getLuoShuIndex,
   getLuoShuGong,
+  getLuoShuIndex9,
+  getLuoShuGong9,
   flyForward,
   flyBackward,
+  // Rotating rules (转盘式)
+  PHYSICAL_CLOCKWISE_ORDER,
+  PHYSICAL_COUNTER_CLOCKWISE_ORDER,
+  ZHONG_GONG_JI_ZHUAN,
+  getPhysicalClockwiseIndex,
+  getPhysicalClockwiseGong,
+  getPhysicalCounterClockwiseIndex,
+  getPhysicalCounterClockwiseGong,
+  rotate,
+  getRotationSteps,
   // Gong mappings
   GONG_NAMES,
   GONG_WUXING,
@@ -278,8 +291,9 @@ export const QI_YI_GEJU_MAP: QiYiGeJuDef[] = [
   { tianGan: '己', diGan: '己', name: '己仪伏吟', type: '凶格', description: '己仪自临，主私昧纠缠' },
   { tianGan: '壬', diGan: '壬', name: '壬仪伏吟', type: '凶格', description: '壬仪自临，流动停滞' },
   { tianGan: '癸', diGan: '癸', name: '癸仪伏吟', type: '凶格', description: '癸仪自临，阴私暗昧' },
+  { tianGan: '辛', diGan: '辛', name: '辛仪伏吟', type: '凶格', description: '辛仪自临，阴金凝滞' },
 
-  // ========== 凶格（22种） ==========
+  // ========== 凶格（18种，不含上方伏吟类） ==========
   { tianGan: '乙', diGan: '辛', name: '青龙折足', type: '凶格', description: '乙遇辛，金克木' },
   { tianGan: '辛', diGan: '乙', name: '白虎逢星', type: '凶格', description: '辛临乙，金克木' }, // 避免与"庚+开+虎"的白虎猖狂混淆
   { tianGan: '丁', diGan: '癸', name: '朱雀投江', type: '凶格', description: '丁遇癸，水克火' },

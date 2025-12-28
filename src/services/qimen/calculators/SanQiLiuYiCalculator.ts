@@ -6,10 +6,9 @@
 import type { GongWei, TianGan, YinYangDun } from '../types';
 import {
   SAN_QI_LIU_YI,
-  LUOSHU_ORDER,
   ZHONG_GONG_JI,
-  getLuoShuIndex,
-  getLuoShuGong,
+  getLuoShuIndex9,
+  getLuoShuGong9,
   getXunShou,
   getLiuYiGan,
 } from '../data/constants';
@@ -64,21 +63,12 @@ export class SanQiLiuYiCalculator {
     const gongGan: Record<GongWei, TianGan> = {} as Record<GongWei, TianGan>;
     const ganGong: Record<TianGan, GongWei> = {} as Record<TianGan, GongWei>;
 
-    // 从起始宫开始，依次布入三奇六仪
+    // 从起始宫开始，依次布入三奇六仪（9干飞布9宫）
     for (let i = 0; i < 9; i++) {
       const gan = SAN_QI_LIU_YI[i];
-      let gong: GongWei;
-
-      if (i === 8) {
-        // 第9个干（乙）在中宫位置
-        gong = 5;
-        gongGan[5] = gan;
-        ganGong[gan] = 5;
-      } else {
-        gong = this.getGongByStep(startGong, i, isYang);
-        gongGan[gong] = gan;
-        ganGong[gan] = gong;
-      }
+      const gong = this.getGongByStep(startGong, i, isYang);
+      gongGan[gong] = gan;
+      ganGong[gan] = gong;
     }
 
     return { gongGan, ganGong };
@@ -100,21 +90,17 @@ export class SanQiLiuYiCalculator {
   }
 
   /**
-   * 根据起始宫位和步数计算目标宫位
+   * 根据起始宫位和步数计算目标宫位（9宫飞布）
+   * 洛书9宫顺序：1(坎) -> 8(艮) -> 3(震) -> 4(巽) -> 5(中) -> 9(离) -> 2(坤) -> 7(兑) -> 6(乾)
    */
   private static getGongByStep(startGong: GongWei, steps: number, isYang: boolean): GongWei {
-    let actualStart = startGong;
-    if (actualStart === 5) {
-      actualStart = ZHONG_GONG_JI;
-    }
-
-    const startIdx = getLuoShuIndex(actualStart);
+    const startIdx = getLuoShuIndex9(startGong);
 
     const targetIdx = isYang
-      ? (startIdx + steps) % 8
-      : ((startIdx - steps) % 8 + 8) % 8;
+      ? (startIdx + steps) % 9
+      : ((startIdx - steps) % 9 + 9) % 9;
 
-    return getLuoShuGong(targetIdx);
+    return getLuoShuGong9(targetIdx);
   }
 
   /**

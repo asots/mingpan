@@ -26,7 +26,10 @@ export type JuShu = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export type YuanType = '上元' | '中元' | '下元';
 
 /** 盘类型 */
-export type PanType = '时盘' | '日盘';
+export type PanType = '时盘' | '日盘' | '月盘' | '年盘';
+
+/** 盘式（飞盘/转盘） */
+export type PanStyle = '转盘' | '飞盘';
 
 /** 置闰方法 */
 export type ZhiRunMethod = 'chaibu' | 'maoshan';
@@ -63,6 +66,8 @@ export interface QimenInput {
   isLunar?: boolean;
   /** 盘类型 */
   panType?: PanType;
+  /** 盘式（转盘/飞盘，默认转盘，遵循《神奇之门》） */
+  panStyle?: PanStyle;
   /** 置闰方法 */
   zhiRunMethod?: ZhiRunMethod;
 }
@@ -181,6 +186,8 @@ export interface GongInfo {
   isKong: boolean;
   /** 是否马星 */
   isMa: boolean;
+  /** 该宫神煞列表（可选，启用神煞功能时填充） */
+  shenSha?: ShenShaInfo[];
 }
 
 /** 格局信息 */
@@ -213,6 +220,8 @@ export interface QimenResult {
   timeInfo: QimenTimeInfo;
   /** 盘类型 */
   panType: PanType;
+  /** 盘式（转盘/飞盘） */
+  panStyle: PanStyle;
   /** 置闰方法 */
   zhiRunMethod: ZhiRunMethod;
   /** 阴阳遁 */
@@ -231,6 +240,8 @@ export interface QimenResult {
   hourGanGong: GongWei;
   /** 格局列表 */
   geJu: GeJuInfo[];
+  /** 用神分析信息（可选，调用 calculateWithYongShen 时填充） */
+  yongShen?: YongShenInfo;
 }
 
 // ============= 服务配置类型 =============
@@ -241,6 +252,206 @@ export interface QimenServiceConfig {
   enableCaching?: boolean;
   /** 调试模式 */
   debug?: boolean;
+}
+
+// ============= 用神系统类型 =============
+
+/** 旺相休囚死状态 */
+export type WangXiangState = '旺' | '相' | '休' | '囚' | '死';
+
+/** 用神类型 */
+export type YongShenType = '门' | '星' | '奇' | '仪' | '神';
+
+/** 与日干关系 */
+export type DayGanRelation = '生' | '克' | '比' | '泄' | '耗';
+
+/** 事类枚举 */
+export type ShiLei =
+  | '求财'
+  | '婚姻'
+  | '疾病'
+  | '出行'
+  | '诉讼'
+  | '考试'
+  | '工作'
+  | '失物'
+  | '置业'
+  | '求官'
+  | '孕产'
+  | '寻人'
+  | '合作'
+  | '其他';
+
+/** 单个用神项 */
+export interface YongShenItem {
+  /** 用神类型（门/星/奇/仪/神） */
+  type: YongShenType;
+  /** 用神名称（如 '戊'、'生门'） */
+  name: string;
+  /** 落宫位置 */
+  gong: GongWei;
+  /** 宫位状态 */
+  state: WangXiangState;
+}
+
+/** 用神分析结果 */
+export interface YongShenAnalysis {
+  /** 用神名称 */
+  yongshen: string;
+  /** 落宫 */
+  gong: GongWei;
+  /** 是否空亡 */
+  isKong: boolean;
+  /** 是否入墓 */
+  isRuMu: boolean;
+  /** 是否击刑 */
+  isJiXing: boolean;
+  /** 与日干关系 */
+  relationToDay: DayGanRelation;
+  /** 受格局影响 */
+  geJuEffects: string[];
+  /** 综合评分 (0-100) */
+  score: number;
+}
+
+/** 主客分析 */
+export interface ZhuKeAnalysis {
+  /** 我方（日干） */
+  zhu: { gong: GongWei; state: WangXiangState };
+  /** 彼方（时干） */
+  ke: { gong: GongWei; state: WangXiangState };
+  /** 主客关系 */
+  relation: '我克彼' | '彼克我' | '比和' | '我生彼' | '彼生我';
+  /** 简要结论 */
+  summary: string;
+}
+
+/** 年命信息 */
+export interface NianMingInfo {
+  /** 年干 */
+  nianGan: TianGan;
+  /** 落宫 */
+  gong: GongWei;
+  /** 宫位状态 */
+  state: WangXiangState;
+}
+
+/** 用神信息 */
+export interface YongShenInfo {
+  /** 事类 */
+  shiLei: ShiLei;
+  /** 主用神列表 */
+  zhuyong: YongShenItem[];
+  /** 辅用神列表 */
+  fuyong: YongShenItem[];
+  /** 用神分析结果 */
+  analysis: YongShenAnalysis[];
+  /** 主客分析（涉及双方的事类） */
+  zhuKe?: ZhuKeAnalysis;
+  /** 年命落宫信息 */
+  nianMing?: NianMingInfo;
+}
+
+// ============= 神煞系统类型 =============
+
+/** 神煞类型 */
+export type ShenShaType = '吉' | '凶' | '中性';
+
+/** 神煞信息 */
+export interface ShenShaInfo {
+  /** 神煞名称 */
+  name: string;
+  /** 吉凶属性 */
+  type: ShenShaType;
+  /** 落宫 */
+  gong: GongWei;
+  /** 简要说明 */
+  description: string;
+}
+
+// ============= 择日系统类型 =============
+
+/** 择日评级 */
+export type ZeRiGrade = '优' | '良' | '中' | '差';
+
+/** 方位名称 */
+export type Direction =
+  | '北'
+  | '东北'
+  | '东'
+  | '东南'
+  | '南'
+  | '西南'
+  | '西'
+  | '西北'
+  | '中';
+
+/** 择日输入接口 */
+export interface ZeRiInput {
+  /** 起始日期 */
+  startDate: Date;
+  /** 结束日期 */
+  endDate: Date;
+  /** 事类 */
+  shiLei: ShiLei;
+  /** 返回数量限制（默认10） */
+  limit?: number;
+  /** 最小评分阈值 (0-100) */
+  minScore?: number;
+  /** 是否输出方位 */
+  includeDirection?: boolean;
+  /** 是否排除节气交接日 */
+  excludeJieQiDay?: boolean;
+  /** 是否排除岁破日 */
+  excludeSuiPo?: boolean;
+  /** 是否排除月破日 */
+  excludeYuePo?: boolean;
+  /** 盘类型 */
+  panType?: PanType;
+  /** 盘式 */
+  panStyle?: PanStyle;
+  /** 置闰方法 */
+  zhiRunMethod?: ZhiRunMethod;
+}
+
+/** 择日评分 */
+export interface ZeRiScore {
+  /** 总分 (0-100) */
+  totalScore: number;
+  /** 格局得分 */
+  geJuScore: number;
+  /** 用神得分 */
+  yongShenScore: number;
+  /** 神煞得分 */
+  shenShaScore: number;
+  /** 推荐理由 */
+  recommendation: string;
+}
+
+/** 方位信息 */
+export interface DirectionInfo {
+  /** 三吉门方位 */
+  sanJiMen: Array<{ men: BaMen; gong: GongWei; direction: Direction }>;
+  /** 用神方位 */
+  yongShen: Array<{ name: string; gong: GongWei; direction: Direction }>;
+}
+
+/** 择日结果 */
+export interface ZeRiResult {
+  /** 推荐时间 */
+  datetime: Date;
+  /** 评分详情 */
+  score: ZeRiScore;
+  /** 评级 */
+  grade: ZeRiGrade;
+  /** 有利因素 */
+  highlights: string[];
+  /** 注意事项 */
+  warnings: string[];
+  /** 方位信息 */
+  direction?: DirectionInfo;
+  /** 完整奇门盘 */
+  qimenResult: QimenResult;
 }
 
 // ============= 错误类型 =============

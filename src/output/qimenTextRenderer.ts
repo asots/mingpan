@@ -25,7 +25,8 @@ export function renderQimenText(result: QimenResult): string {
   lines.push('');
 
   // 基本信息
-  lines.push(`**${result.yinYangDun}${result.juShu}局** | ${result.panType} | ${result.yuan} | ${result.zhiRunMethod === 'chaibu' ? '拆补法' : '茅山法'}`);
+  const panStyleText = result.panStyle === '飞盘' ? '飞盘式' : '转盘式';
+  lines.push(`**${result.yinYangDun}${result.juShu}局** | ${result.panType} | ${panStyleText} | ${result.yuan} | ${result.zhiRunMethod === 'chaibu' ? '拆补法' : '茅山法'}`);
   lines.push('');
 
   // 时间信息
@@ -175,3 +176,260 @@ function getGongName(gong: GongWei): string {
 
 // 导出辅助函数
 export { renderJiuGongGrid, getGongName };
+
+// ============= Phase 3: 用神分析 + 择日输出渲染 =============
+
+import type {
+  YongShenInfo,
+  YongShenItem,
+  YongShenAnalysis,
+  ZhuKeAnalysis,
+  NianMingInfo,
+  ShenShaInfo,
+  ZeRiResult,
+  ShiLei,
+} from '../services/qimen/types';
+
+/**
+ * 渲染带用神分析的奇门盘
+ */
+export function renderQimenYongShenText(result: QimenResult): string {
+  const lines: string[] = [];
+
+  // 首先渲染基础盘面
+  lines.push(renderQimenText(result));
+
+  // 如果有用神分析
+  if (result.yongShen) {
+    lines.push('');
+    lines.push(renderYongShenText(result.yongShen));
+  }
+
+  // 如果各宫有神煞信息，单独汇总
+  const allShenSha: ShenShaInfo[] = [];
+  for (const gong of [1, 2, 3, 4, 5, 6, 7, 8, 9] as GongWei[]) {
+    if (result.gongs[gong].shenSha) {
+      allShenSha.push(...result.gongs[gong].shenSha!);
+    }
+  }
+  if (allShenSha.length > 0) {
+    lines.push('');
+    lines.push(renderShenShaText(allShenSha));
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 渲染用神分析
+ */
+export function renderYongShenText(yongShen: YongShenInfo): string {
+  const lines: string[] = [];
+
+  lines.push('### 用神分析');
+  lines.push('');
+  lines.push(`**事类**：${yongShen.shiLei}`);
+  lines.push('');
+
+  // 主用神
+  if (yongShen.zhuyong.length > 0) {
+    lines.push('**主用神**：');
+    for (const item of yongShen.zhuyong) {
+      lines.push(`- ${item.name}：落${getGongName(item.gong)}（${item.state}）`);
+    }
+    lines.push('');
+  }
+
+  // 辅用神
+  if (yongShen.fuyong.length > 0) {
+    lines.push('**辅用神**：');
+    for (const item of yongShen.fuyong) {
+      lines.push(`- ${item.name}：落${getGongName(item.gong)}（${item.state}）`);
+    }
+    lines.push('');
+  }
+
+  // 用神详细分析
+  if (yongShen.analysis.length > 0) {
+    lines.push('**用神评分**：');
+    lines.push('');
+    lines.push('| 用神 | 落宫 | 评分 | 状态 |');
+    lines.push('|:----:|:----:|:----:|:-----|');
+
+    for (const a of yongShen.analysis) {
+      const statusParts: string[] = [];
+      if (a.isKong) statusParts.push('空亡');
+      if (a.isRuMu) statusParts.push('入墓');
+      if (a.isJiXing) statusParts.push('击刑');
+      statusParts.push(`${a.relationToDay}日干`);
+      if (a.geJuEffects.length > 0) {
+        statusParts.push(a.geJuEffects.join('、'));
+      }
+
+      lines.push(`| ${a.yongshen} | ${getGongName(a.gong)} | ${a.score}分 | ${statusParts.join('、')} |`);
+    }
+    lines.push('');
+  }
+
+  // 主客分析
+  if (yongShen.zhuKe) {
+    lines.push('**主客分析**：');
+    lines.push(`- 我方（日干）：落${getGongName(yongShen.zhuKe.zhu.gong)}（${yongShen.zhuKe.zhu.state}）`);
+    lines.push(`- 对方（时干）：落${getGongName(yongShen.zhuKe.ke.gong)}（${yongShen.zhuKe.ke.state}）`);
+    lines.push(`- 主客关系：${yongShen.zhuKe.relation}`);
+    lines.push(`- 结论：${yongShen.zhuKe.summary}`);
+    lines.push('');
+  }
+
+  // 年命分析
+  if (yongShen.nianMing) {
+    lines.push('**年命分析**：');
+    lines.push(`- 年干${yongShen.nianMing.nianGan}落${getGongName(yongShen.nianMing.gong)}（${yongShen.nianMing.state}）`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 渲染神煞信息
+ */
+export function renderShenShaText(shenShaList: ShenShaInfo[]): string {
+  const lines: string[] = [];
+
+  lines.push('### 神煞信息');
+  lines.push('');
+
+  // 按吉凶分组
+  const ji = shenShaList.filter(s => s.type === '吉');
+  const xiong = shenShaList.filter(s => s.type === '凶');
+  const zhongxing = shenShaList.filter(s => s.type === '中性');
+
+  if (ji.length > 0) {
+    lines.push('**吉神**：');
+    for (const s of ji) {
+      lines.push(`- ${s.name}：${getGongName(s.gong)}（${s.description}）`);
+    }
+    lines.push('');
+  }
+
+  if (xiong.length > 0) {
+    lines.push('**凶煞**：');
+    for (const s of xiong) {
+      lines.push(`- ${s.name}：${getGongName(s.gong)}（${s.description}）`);
+    }
+    lines.push('');
+  }
+
+  if (zhongxing.length > 0) {
+    lines.push('**中性**：');
+    for (const s of zhongxing) {
+      lines.push(`- ${s.name}：${getGongName(s.gong)}（${s.description}）`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 渲染择日结果
+ */
+export function renderQimenZeRiText(results: ZeRiResult[], shiLei: ShiLei): string {
+  const lines: string[] = [];
+
+  lines.push('## 奇门择日结果');
+  lines.push('');
+  lines.push(`**事类**：${shiLei}`);
+  lines.push(`**推荐数量**：${results.length}`);
+  lines.push('');
+
+  if (results.length === 0) {
+    lines.push('未找到符合条件的吉时。建议：');
+    lines.push('- 扩大日期范围');
+    lines.push('- 降低最小评分阈值');
+    lines.push('- 减少过滤条件');
+    return lines.join('\n');
+  }
+
+  // 概览表格
+  lines.push('### 推荐时辰概览');
+  lines.push('');
+  lines.push('| 序号 | 日期时间 | 评分 | 评级 | 局数 |');
+  lines.push('|:----:|:---------|:----:|:----:|:----:|');
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const dateStr = formatDateTime(r.datetime);
+    lines.push(`| ${i + 1} | ${dateStr} | ${r.score.totalScore}分 | ${r.grade} | ${r.qimenResult.yinYangDun}${r.qimenResult.juShu}局 |`);
+  }
+  lines.push('');
+
+  // 详细信息（前3个）
+  const detailCount = Math.min(3, results.length);
+  lines.push(`### 详细分析（前${detailCount}个）`);
+  lines.push('');
+
+  for (let i = 0; i < detailCount; i++) {
+    const r = results[i];
+    lines.push(`#### ${i + 1}. ${formatDateTime(r.datetime)}`);
+    lines.push('');
+    lines.push(`**评分**：${r.score.totalScore}分（${r.grade}）`);
+    lines.push(`- 格局：${r.score.geJuScore}分`);
+    lines.push(`- 用神：${r.score.yongShenScore}分`);
+    lines.push(`- 神煞：${r.score.shenShaScore}分`);
+    lines.push('');
+    lines.push(`**推荐理由**：${r.score.recommendation}`);
+    lines.push('');
+
+    if (r.highlights.length > 0) {
+      lines.push('**有利因素**：');
+      for (const h of r.highlights) {
+        lines.push(`- ✓ ${h}`);
+      }
+      lines.push('');
+    }
+
+    if (r.warnings.length > 0) {
+      lines.push('**注意事项**：');
+      for (const w of r.warnings) {
+        lines.push(`- ✗ ${w}`);
+      }
+      lines.push('');
+    }
+
+    // 方位信息
+    if (r.direction) {
+      lines.push('**方位信息**：');
+      if (r.direction.sanJiMen.length > 0) {
+        lines.push('- 三吉门方位：' + r.direction.sanJiMen.map(m => `${m.men}门（${m.direction}）`).join('、'));
+      }
+      if (r.direction.yongShen.length > 0) {
+        lines.push('- 用神方位：' + r.direction.yongShen.map(y => `${y.name}（${y.direction}）`).join('、'));
+      }
+      lines.push('');
+    }
+
+    lines.push('---');
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 格式化日期时间
+ */
+function formatDateTime(date: Date): string {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = date.getHours();
+
+  // 时辰名称
+  const shiChenNames = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
+  const shiChenIdx = Math.floor((hour + 1) % 24 / 2);
+  const shiChen = shiChenNames[shiChenIdx];
+
+  return `${year}年${month}月${day}日 ${shiChen}时（${hour}:00）`;
+}

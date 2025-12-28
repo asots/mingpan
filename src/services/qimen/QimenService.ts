@@ -15,18 +15,29 @@ import type {
   TianGan,
   DiZhi,
   PanType,
+  PanStyle,
   ZhiRunMethod,
   SiZhuInfo,
   XunShouInfo,
   QimenCalculationError,
+  ShiLei,
+  ShenShaInfo,
+  YongShenInfo,
+  ZeRiInput,
+  ZeRiResult,
 } from './types';
 import { JuShuCalculator } from './calculators/JuShuCalculator';
 import { JiuGongCalculator } from './calculators/JiuGongCalculator';
 import { SanQiLiuYiCalculator } from './calculators/SanQiLiuYiCalculator';
+import { ZhuanPanCalculator } from './calculators/ZhuanPanCalculator';
+import { PanTypeCalculator } from './calculators/PanTypeCalculator';
 import { BaMenCalculator } from './calculators/BaMenCalculator';
 import { JiuXingCalculator } from './calculators/JiuXingCalculator';
 import { BaShenCalculator } from './calculators/BaShenCalculator';
 import { GeJuCalculator } from './calculators/GeJuCalculator';
+import { YongShenCalculator } from './calculators/YongShenCalculator';
+import { ShenShaCalculator } from './calculators/ShenShaCalculator';
+import { ZeRiCalculator } from './calculators/ZeRiCalculator';
 import {
   GONG_NAMES,
   GONG_WUXING,
@@ -77,8 +88,15 @@ export class QimenService {
     }
 
     // 验证盘类型（可选）
-    if (input.panType !== undefined && input.panType !== '时盘' && input.panType !== '日盘') {
-      throw new Error(`盘类型必须是 '时盘' 或 '日盘'，当前值: ${input.panType}`);
+    const validPanTypes: PanType[] = ['时盘', '日盘', '月盘', '年盘'];
+    if (input.panType !== undefined && !validPanTypes.includes(input.panType)) {
+      throw new Error(`盘类型必须是 ${validPanTypes.join('/')}，当前值: ${input.panType}`);
+    }
+
+    // 验证盘式（可选）
+    const validPanStyles: PanStyle[] = ['转盘', '飞盘'];
+    if (input.panStyle !== undefined && !validPanStyles.includes(input.panStyle)) {
+      throw new Error(`盘式必须是 ${validPanStyles.join('/')}，当前值: ${input.panStyle}`);
     }
 
     // 验证置闰方法（可选）
@@ -89,72 +107,124 @@ export class QimenService {
 
   /**
    * 计算奇门遁甲盘
+   *
+   * 支持四种盘类型：时盘、日盘、月盘、年盘
+   * 支持两种盘式：转盘（默认）、飞盘
    */
   calculate(input: QimenInput): QimenResult {
     // 输入参数验证
     this.validateInput(input);
 
     const panType: PanType = input.panType || '时盘';
+    const panStyle: PanStyle = input.panStyle || '转盘';
     const zhiRunMethod: ZhiRunMethod = input.zhiRunMethod || 'chaibu';
 
     // 1. 处理时间，获取四柱和节气信息
     const { siZhu, jieQi, jieQiDate, solarDate, lunarDate } = this.getTimeInfo(input);
 
-    // 2. 计算局数（阴阳遁 + 上中下元 + 局数）
-    const currentDate = new Date(input.year, input.month - 1, input.day);
-    const juShuResult = JuShuCalculator.calculate(
-      jieQi,
-      siZhu.dayGanZhi,
-      zhiRunMethod,
-      jieQiDate,
-      currentDate
-    );
-    const { yinYangDun, juShu, yuan } = juShuResult;
+    // 2. 计算局数参数（阴阳遁 + 上中下元 + 局数）
+    let yinYangDun: '阳遁' | '阴遁';
+    let juShu: import('./types').JuShu;
+    let yuan: import('./types').YuanType;
+
+    if (panType === '年盘') {
+      // 年盘：使用 PanTypeCalculator 计算
+      const yearPanResult = PanTypeCalculator.calculateYearPan({
+        yearGanZhi: siZhu.yearGanZhi,
+        currentJieQi: jieQi,
+      });
+      yinYangDun = yearPanResult.yinYangDun;
+      juShu = yearPanResult.juShu;
+      yuan = yearPanResult.yuan;
+    } else if (panType === '月盘') {
+      // 月盘：使用 PanTypeCalculator 计算
+      const monthPanResult = PanTypeCalculator.calculateMonthPan({
+        monthGanZhi: siZhu.monthGanZhi,
+      });
+      yinYangDun = monthPanResult.yinYangDun;
+      juShu = monthPanResult.juShu;
+      yuan = monthPanResult.yuan;
+    } else {
+      // 时盘/日盘：使用 JuShuCalculator 计算
+      const currentDate = new Date(input.year, input.month - 1, input.day);
+      const juShuResult = JuShuCalculator.calculate(
+        jieQi,
+        siZhu.dayGanZhi,
+        zhiRunMethod,
+        jieQiDate,
+        currentDate
+      );
+      yinYangDun = juShuResult.yinYangDun;
+      juShu = juShuResult.juShu;
+      yuan = juShuResult.yuan;
+    }
 
     // 3. 计算地盘（九宫布局）
     const diPanResult = JiuGongCalculator.calculate(juShu, yinYangDun);
 
-    // 4. 确定用于计算的干支（时盘用时干支，日盘用日干支）
-    const refGanZhi = panType === '时盘' ? siZhu.hourGanZhi : siZhu.dayGanZhi;
-    const refZhi = panType === '时盘' ? siZhu.hourZhi : siZhu.dayZhi;
+    // 4. 确定用于计算的参考干支
+    const { refGanZhi, refZhi } = this.getRefGanZhi(panType, siZhu);
 
-    // 5. 计算天盘（三奇六仪飞布）
-    const tianPanResult = SanQiLiuYiCalculator.calculate(
+    // 5. 计算天盘、九星、八门（根据盘式选择算法）
+    let tianPanResult: { gongGan: Record<GongWei, TianGan>; ganGong: Record<TianGan, GongWei> };
+    let jiuXingResult: ReturnType<typeof JiuXingCalculator.calculate>;
+    let baMenResult: ReturnType<typeof BaMenCalculator.calculate>;
+
+    // 5.1 先计算旬首信息（需要先用飞盘式计算初始天盘以获取ganGong）
+    const initialTianPan = SanQiLiuYiCalculator.calculate(
       diPanResult.ganGong,
       refGanZhi,
       yinYangDun
     );
 
-    // 6. 计算旬首信息
     const xunShouInfo = this.calculateXunShou(
       refGanZhi,
       diPanResult.ganGong,
-      tianPanResult.ganGong,
+      initialTianPan.ganGong,
       refZhi,
       yinYangDun
     );
 
-    // 7. 计算九星
-    const jiuXingResult = JiuXingCalculator.calculate(
-      xunShouInfo.zhiFuGong,
-      refZhi,
-      yinYangDun
-    );
+    // 5.2 根据盘式选择算法
+    if (panStyle === '转盘') {
+      // 转盘式：使用 ZhuanPanCalculator
+      tianPanResult = ZhuanPanCalculator.calculateTianPan(
+        diPanResult.ganGong,
+        refGanZhi,
+        yinYangDun
+      );
+      jiuXingResult = ZhuanPanCalculator.calculateJiuXing(
+        xunShouInfo.zhiFuGong,
+        refZhi,
+        yinYangDun
+      );
+      baMenResult = ZhuanPanCalculator.calculateBaMen(
+        xunShouInfo.zhiFuGong,
+        refZhi,
+        yinYangDun
+      );
+    } else {
+      // 飞盘式：使用原有的飞布算法
+      tianPanResult = initialTianPan;
+      jiuXingResult = JiuXingCalculator.calculate(
+        xunShouInfo.zhiFuGong,
+        refZhi,
+        yinYangDun
+      );
+      baMenResult = BaMenCalculator.calculate(
+        xunShouInfo.zhiFuGong,
+        refZhi,
+        yinYangDun
+      );
+    }
 
-    // 8. 计算八门
-    const baMenResult = BaMenCalculator.calculate(
-      xunShouInfo.zhiFuGong,
-      refZhi,
-      yinYangDun
-    );
-
-    // 9. 计算八神
+    // 6. 计算八神（八神始终按固定顺序排布，不受盘式影响）
     const baShenResult = BaShenCalculator.calculate(
       jiuXingResult.zhiFuLuoGong,
       yinYangDun
     );
 
-    // 10. 组装九宫信息
+    // 7. 组装九宫信息
     const gongs = this.assembleGongs(
       diPanResult.gongGan,
       tianPanResult.gongGan,
@@ -165,19 +235,19 @@ export class QimenService {
       siZhu.dayZhi
     );
 
-    // 11. 计算日干/时干落宫
-    // 注意：甲遁于六仪，需根据各自干支的旬首确定
+    // 8. 计算日干/时干落宫
     const dayGanGong = this.findGanGong(siZhu.dayGan, siZhu.dayGanZhi, tianPanResult.ganGong);
     const hourGanGong = this.findGanGong(siZhu.hourGan, siZhu.hourGanZhi, tianPanResult.ganGong);
 
-    // 12. 计算格局
+    // 9. 计算格局（传入 panType 以过滤时辰相关格局）
     const geJu = GeJuCalculator.calculate(
       gongs,
       yinYangDun,
       siZhu.dayGan,
-      siZhu.hourGan,
-      siZhu.hourZhi,
-      xunShouInfo
+      panType === '时盘' ? siZhu.hourGan : null,
+      panType === '时盘' ? siZhu.hourZhi : null,
+      xunShouInfo,
+      panType
     );
 
     // 更新旬首信息中的值符值使落宫
@@ -197,6 +267,7 @@ export class QimenService {
         jieQi,
       },
       panType,
+      panStyle,
       zhiRunMethod,
       yinYangDun,
       juShu,
@@ -207,6 +278,35 @@ export class QimenService {
       hourGanGong,
       geJu,
     };
+  }
+
+  /**
+   * 获取参考干支（根据盘类型）
+   */
+  private getRefGanZhi(panType: PanType, siZhu: SiZhuInfo): { refGanZhi: string; refZhi: DiZhi } {
+    switch (panType) {
+      case '年盘':
+        return {
+          refGanZhi: siZhu.yearGanZhi,
+          refZhi: siZhu.yearGanZhi.charAt(1) as DiZhi,
+        };
+      case '月盘':
+        return {
+          refGanZhi: siZhu.monthGanZhi,
+          refZhi: siZhu.monthGanZhi.charAt(1) as DiZhi,
+        };
+      case '日盘':
+        return {
+          refGanZhi: siZhu.dayGanZhi,
+          refZhi: siZhu.dayZhi,
+        };
+      case '时盘':
+      default:
+        return {
+          refGanZhi: siZhu.hourGanZhi,
+          refZhi: siZhu.hourZhi,
+        };
+    }
   }
 
   /**
@@ -408,5 +508,100 @@ export class QimenService {
       return ZHONG_GONG_JI; // 默认返回坤二
     }
     return gong === 5 ? ZHONG_GONG_JI : gong;
+  }
+
+  // ============= Phase 3: 用神系统 + 神煞 + 择日 =============
+
+  /**
+   * 计算神煞信息
+   *
+   * 独立计算神煞，不影响基础排盘性能。
+   *
+   * @param result 奇门盘结果
+   * @returns 神煞信息列表
+   */
+  calculateShenSha(result: QimenResult): ShenShaInfo[] {
+    return ShenShaCalculator.calculateAll(result);
+  }
+
+  /**
+   * 带用神分析的高级排盘
+   *
+   * 在基础排盘基础上，增加用神分析、神煞计算和主客分析。
+   *
+   * @param input 排盘输入
+   * @param shiLei 事类
+   * @param options 可选配置
+   * @returns 扩展的奇门盘结果（含 yongShen 字段）
+   */
+  calculateWithYongShen(
+    input: QimenInput,
+    shiLei: ShiLei,
+    options?: { nianGan?: TianGan; includeShenSha?: boolean }
+  ): QimenResult {
+    // 基础排盘
+    const result = this.calculate(input);
+
+    // 用神分析
+    const yongShenInfo: YongShenInfo = YongShenCalculator.analyze(
+      result,
+      shiLei,
+      options?.nianGan
+    );
+
+    // 附加用神信息到结果
+    result.yongShen = yongShenInfo;
+
+    // 可选：计算神煞并附加到各宫
+    if (options?.includeShenSha) {
+      const shenShaList = this.calculateShenSha(result);
+      const gongShenSha = ShenShaCalculator.distributeToGongs(shenShaList);
+
+      // 将神煞信息附加到各宫
+      for (const gong of [1, 2, 3, 4, 5, 6, 7, 8, 9] as GongWei[]) {
+        result.gongs[gong].shenSha = gongShenSha[gong];
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 择日功能
+   *
+   * 根据事类在指定日期范围内筛选吉时。
+   *
+   * @param zeRiInput 择日输入
+   * @returns 择日结果列表
+   */
+  findAuspiciousDates(zeRiInput: ZeRiInput): ZeRiResult[] {
+    // 注入排盘函数到 ZeRiCalculator
+    ZeRiCalculator.setCalculateFn((calcInput) => {
+      return this.calculate({
+        year: calcInput.year,
+        month: calcInput.month,
+        day: calcInput.day,
+        hour: calcInput.hour,
+        panType: (calcInput.panType as PanType) || '时盘',
+        panStyle: zeRiInput.panStyle || '转盘',
+        zhiRunMethod: (calcInput.zhiRunMethod as ZhiRunMethod) || 'chaibu',
+      });
+    });
+
+    return ZeRiCalculator.findAuspiciousTimes(zeRiInput);
+  }
+
+  /**
+   * 清除择日缓存
+   */
+  clearZeRiCache(): void {
+    ZeRiCalculator.clearCache();
+  }
+
+  /**
+   * 获取择日缓存大小
+   */
+  getZeRiCacheSize(): number {
+    return ZeRiCalculator.getCacheSize();
   }
 }

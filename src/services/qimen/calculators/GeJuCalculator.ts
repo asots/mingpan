@@ -19,6 +19,7 @@ import type {
   XunShouInfo,
   YinYangDun,
   BaMen,
+  PanType,
 } from '../types';
 import {
   getLiuYiGan,
@@ -34,18 +35,35 @@ import {
 export class GeJuCalculator {
   /**
    * 计算所有格局
+   *
+   * @param gongs 九宫信息
+   * @param yinYangDun 阴阳遁
+   * @param dayGan 日干（时盘/日盘使用日干，月盘使用月干，年盘使用年干）
+   * @param hourGan 时干（仅时盘提供，其他盘类型为 null）
+   * @param hourZhi 时支（仅时盘提供，其他盘类型为 null）
+   * @param xunShou 旬首信息
+   * @param panType 盘类型（默认时盘）
+   *
+   * 格局分类：
+   * - 日干格局：只需要 dayGan，所有盘类型都检测
+   * - 时辰格局：需要 hourGan 和/或 hourZhi，仅时盘检测
+   *   - 五不遇时：需要 dayGan + hourGan
+   *   - 飞干格/伏干格：需要 dayGan + hourGan
+   *   - 天显时格：需要 hourZhi
+   *   - 地私门格：需要 hourZhi
    */
   static calculate(
     gongs: Record<GongWei, GongInfo>,
     yinYangDun: YinYangDun,
     dayGan: TianGan,
-    hourGan: TianGan,
-    hourZhi: DiZhi,
-    xunShou: XunShouInfo
+    hourGan: TianGan | null,
+    hourZhi: DiZhi | null,
+    xunShou: XunShouInfo,
+    panType: PanType = '时盘'
   ): GeJuInfo[] {
     const geJuList: GeJuInfo[] = [];
 
-    // 检查各类格局
+    // ============= 日干格局（所有盘类型都检测） =============
     geJuList.push(...this.checkSanQiGeJu(gongs));
     geJuList.push(...this.checkSanQiDeMenGeJu(gongs));
     geJuList.push(...this.checkYuNuShouMenGeJu(gongs));
@@ -53,20 +71,26 @@ export class GeJuCalculator {
     geJuList.push(...this.checkMenPoGeJu(gongs));
     geJuList.push(...this.checkRuMuGeJu(gongs));
     geJuList.push(...this.checkJiXingGeJu(gongs));
-    geJuList.push(...this.checkWuBuYuShiGeJu(dayGan, hourGan));
     geJuList.push(...this.checkFuYinGeJu(gongs, xunShou));
     geJuList.push(...this.checkQingLongTaoGeJu(gongs));
     geJuList.push(...this.checkBaiHuChangKuangGeJu(gongs));
-
-    // 新增格局检测
     geJuList.push(...this.checkQiYiZuHeGeJu(gongs)); // 奇仪组合格局（核心）
     geJuList.push(...this.checkFanYinGeJu(gongs, xunShou));
     geJuList.push(...this.checkQiYiXiangHeGeJu(gongs));
-    geJuList.push(...this.checkFeiGanFuGanGeJu(gongs, dayGan, hourGan, xunShou));
-    geJuList.push(...this.checkTianXianShiGeJu(gongs, hourZhi));
-    geJuList.push(...this.checkDiSiMenGeJu(gongs, hourZhi));
     geJuList.push(...this.checkWangGaiGeJu(gongs));
     geJuList.push(...this.checkTianLaoGeJu(gongs));
+
+    // ============= 时辰格局（仅时盘检测） =============
+    if (panType === '时盘' && hourGan !== null && hourZhi !== null) {
+      // 五不遇时：需要 dayGan + hourGan
+      geJuList.push(...this.checkWuBuYuShiGeJu(dayGan, hourGan));
+      // 飞干格/伏干格：需要 dayGan + hourGan
+      geJuList.push(...this.checkFeiGanFuGanGeJu(gongs, dayGan, hourGan, xunShou));
+      // 天显时格：需要 hourZhi
+      geJuList.push(...this.checkTianXianShiGeJu(gongs, hourZhi));
+      // 地私门格：需要 hourZhi
+      geJuList.push(...this.checkDiSiMenGeJu(gongs, hourZhi));
+    }
 
     return geJuList;
   }
@@ -517,9 +541,9 @@ export class GeJuCalculator {
    * 奇仪组合格局检测（断卦核心）
    * 检测天盘干+地盘干的特定组合
    *
-   * 包含22种格局：
-   * - 吉格8种：青龙返首、飞鸟跌穴、丁遇戊格、日月会合等
-   * - 凶格14种：青龙折足、白虎猖狂、朱雀投江、大格、小格等
+   * 包含33种格局：
+   * - 吉格10种：青龙返首、飞鸟跌穴、丁遇戊格、日月会合、乙奇伏吟、丙奇伏吟等
+   * - 凶格23种：青龙折足、朱雀投江、大格、小格、刑格、辛仪伏吟、戊仪伏吟等
    */
   private static checkQiYiZuHeGeJu(gongs: Record<GongWei, GongInfo>): GeJuInfo[] {
     const results: GeJuInfo[] = [];
@@ -792,25 +816,15 @@ export class GeJuCalculator {
 
   /**
    * 天牢格检测
-   * 注：庚+开门+白虎 同时触发"白虎猖狂"和"天牢"
-   *   - 白虎猖狂：侧重凶暴、攻击之象
-   *   - 天牢：侧重禁锢、囚禁之象，主官司牢狱
+   * 庚+杜门 = 天牢，主阻滞闭塞、官司牢狱
+   *
+   * 注：庚+开门+白虎 由"白虎猖狂"格局检测，不再重复
    */
   private static checkTianLaoGeJu(gongs: Record<GongWei, GongInfo>): GeJuInfo[] {
     const results: GeJuInfo[] = [];
 
     for (const gong of Object.values(gongs)) {
-      // 庚+开门+白虎 = 天牢（与白虎猖狂同现，侧重不同）
-      if (gong.tianPanGan === '庚' && gong.men === '开' && gong.shen === '虎') {
-        results.push({
-          name: '天牢',
-          type: '凶格',
-          description: `庚临开门遇白虎于${gong.gongName}宫，主官司牢狱`,
-          gongs: [gong.gong],
-        });
-      }
-
-      // 庚+杜门 = 天牢变体（独立格局）
+      // 庚+杜门 = 天牢
       if (gong.tianPanGan === '庚' && gong.men === '杜') {
         results.push({
           name: '天牢',

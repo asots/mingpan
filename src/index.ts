@@ -232,8 +232,51 @@ const QimenBasicSchema = z.object({
   hour: z.number().int().min(0).max(23).describe("時辰（0-23，24小時制）"),
   minute: z.number().int().min(0).max(59).optional().default(0).describe("分鐘（0-59）"),
   isLunar: isLunarField,
-  panType: z.enum(['时盘', '日盘']).optional().default('时盘').describe("盤類型：时盘（默認）或日盘"),
+  panType: z.enum(['时盘', '日盘', '月盘', '年盘']).optional().default('时盘').describe("盤類型：时盘（默認）、日盘、月盘、年盘"),
+  panStyle: z.enum(['转盘', '飞盘']).optional().default('转盘').describe("盤式：转盘（默認，遵循《神奇之門》）或飞盘"),
   zhiRunMethod: z.enum(['chaibu', 'maoshan']).optional().default('chaibu').describe("置閏方法：chaibu=拆補法（默認），maoshan=茅山法"),
+});
+
+// 奇门用神分析
+const QimenYongShenSchema = z.object({
+  year: z.number().int().min(1900).max(2100).describe("年份（公曆，1900-2100）"),
+  month: z.number().int().min(1).max(12).describe("月份（1-12）"),
+  day: z.number().int().min(1).max(31).describe("日期（1-31）"),
+  hour: z.number().int().min(0).max(23).describe("時辰（0-23，24小時制）"),
+  minute: z.number().int().min(0).max(59).optional().default(0).describe("分鐘（0-59）"),
+  isLunar: isLunarField,
+  panType: z.enum(['时盘', '日盘', '月盘', '年盘']).optional().default('时盘').describe("盤類型：时盘（默認）、日盘、月盘、年盘"),
+  panStyle: z.enum(['转盘', '飞盘']).optional().default('转盘').describe("盤式：转盘（默認）或飞盘"),
+  zhiRunMethod: z.enum(['chaibu', 'maoshan']).optional().default('chaibu').describe("置閏方法"),
+  shiLei: z.enum([
+    '求财', '婚姻', '疾病', '出行', '诉讼', '考试', '工作',
+    '失物', '置业', '求官', '孕产', '寻人', '合作', '其他'
+  ]).describe("事類（用於確定用神）"),
+  nianGan: z.enum(['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']).optional().describe("年干（用於年命分析，可選）"),
+  includeShenSha: z.boolean().optional().default(true).describe("是否包含神煞分析"),
+});
+
+// 奇门择日
+const QimenZeRiSchema = z.object({
+  startYear: z.number().int().min(1900).max(2100).describe("起始年份"),
+  startMonth: z.number().int().min(1).max(12).describe("起始月份"),
+  startDay: z.number().int().min(1).max(31).describe("起始日期"),
+  endYear: z.number().int().min(1900).max(2100).describe("結束年份"),
+  endMonth: z.number().int().min(1).max(12).describe("結束月份"),
+  endDay: z.number().int().min(1).max(31).describe("結束日期"),
+  shiLei: z.enum([
+    '求财', '婚姻', '疾病', '出行', '诉讼', '考试', '工作',
+    '失物', '置业', '求官', '孕产', '寻人', '合作', '其他'
+  ]).describe("事類"),
+  limit: z.number().int().min(1).max(50).optional().default(10).describe("返回數量限制（默認10）"),
+  minScore: z.number().int().min(0).max(100).optional().default(60).describe("最小評分閾值（0-100，默認60）"),
+  includeDirection: z.boolean().optional().default(false).describe("是否輸出方位信息"),
+  excludeJieQiDay: z.boolean().optional().default(false).describe("是否排除節氣交接日"),
+  excludeSuiPo: z.boolean().optional().default(false).describe("是否排除歲破日"),
+  excludeYuePo: z.boolean().optional().default(false).describe("是否排除月破日"),
+  panType: z.enum(['时盘', '日盘', '月盘', '年盘']).optional().default('时盘').describe("盤類型"),
+  panStyle: z.enum(['转盘', '飞盘']).optional().default('转盘').describe("盤式"),
+  zhiRunMethod: z.enum(['chaibu', 'maoshan']).optional().default('chaibu').describe("置閏方法"),
 });
 
 // ============================================
@@ -577,11 +620,80 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 - 格局判斷（吉格/凶格約20-30種）
 
 支持選項：
-- 盤類型：時盤（默認）或日盤
+- 盤類型：時盤（默認）、日盤、月盤、年盤
+- 盤式：轉盤（默認，遵循《神奇之門》）或飛盤
 - 置閏法：拆補法（默認）或茅山法
+
+盤類型說明：
+- 時盤：以時辰為主導，適用於即時預測
+- 日盤：以日干支為主導，適用於當日吉凶
+- 月盤：以月干支為主導，適用於月度運勢
+- 年盤：以年干支為主導，適用於年度規劃
+
+盤式說明：
+- 轉盤：天盤、八門、九星按物理方向旋轉（《神奇之門》派）
+- 飛盤：天盤、八門、九星按洛書軌跡飛布（傳統飛宮法）
 
 輸出為 Markdown 格式，含 ASCII 九宮格，便於 AI 分析解讀。`,
         inputSchema: schemaToJson(QimenBasicSchema),
+      },
+      {
+        name: "qimen_yongshen",
+        description: `奇門遁甲用神分析。
+
+在基礎排盤基礎上，根據事類選取用神並分析：
+
+**支持 14 種事類**：
+求財、婚姻、疾病、出行、訴訟、考試、工作、失物、置業、求官、孕產、尋人、合作、其他
+
+**分析內容**：
+- 主用神/輔用神識別及落宮
+- 用神旺相休囚死狀態
+- 用神空亡、入墓、擊刑檢測
+- 與日干生克關係
+- 受格局影響評估
+- 主客分析（涉及雙方的事類）
+- 年命分析（可選）
+- 神煞信息（可選）
+
+**評分系統**：
+每個用神 0-100 分，綜合考量各因素
+
+輸出為結構化 Markdown，便於 AI 斷卦分析。`,
+        inputSchema: schemaToJson(QimenYongShenSchema),
+      },
+      {
+        name: "qimen_zeri",
+        description: `奇門遁甲擇日功能。
+
+在指定日期範圍內篩選吉時：
+
+**輸入**：
+- 起止日期範圍
+- 事類（14 種）
+- 可選過濾條件
+
+**評分維度**：
+- 格局評分（吉格加分、凶格減分）
+- 用神評分（得位、空墓等）
+- 神煞評分（吉神凶煞）
+
+**過濾條件**：
+- 最小評分閾值
+- 排除歲破日
+- 排除月破日
+- 排除節氣交接日
+
+**輸出**：
+- 推薦時辰列表（含評分、評級）
+- 有利因素、注意事項
+- 可選方位信息（三吉門方位、用神方位）
+
+**性能目標**：
+- 7天：< 2秒
+- 30天：< 5秒
+- 365天：< 60秒`,
+        inputSchema: schemaToJson(QimenZeRiSchema),
       },
     ],
   };
@@ -863,10 +975,82 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         minute: normalized.minute,
         isLunar: false,  // Already converted to solar if needed
         panType: validated.panType,
+        panStyle: validated.panStyle,
         zhiRunMethod: validated.zhiRunMethod,
       });
 
       const text = renderQimenText(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text,
+          },
+        ],
+      };
+    }
+    // === 奇門遁甲用神 ===
+    if (name === "qimen_yongshen") {
+      const validated = QimenYongShenSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
+
+      const qimenService = new QimenService();
+      const result = qimenService.calculateWithYongShen(
+        {
+          year: normalized.year,
+          month: normalized.month,
+          day: normalized.day,
+          hour: normalized.hour,
+          minute: normalized.minute,
+          isLunar: false,
+          panType: validated.panType,
+          panStyle: validated.panStyle,
+          zhiRunMethod: validated.zhiRunMethod,
+        },
+        validated.shiLei,
+        {
+          nianGan: validated.nianGan,
+          includeShenSha: validated.includeShenSha,
+        }
+      );
+
+      // 使用渲染器生成输出
+      const { renderQimenYongShenText } = await import("./output/qimenTextRenderer");
+      const text = renderQimenYongShenText(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text,
+          },
+        ],
+      };
+    }
+
+    if (name === "qimen_zeri") {
+      const validated = QimenZeRiSchema.parse(args);
+
+      const qimenService = new QimenService();
+      const results = qimenService.findAuspiciousDates({
+        startDate: new Date(validated.startYear, validated.startMonth - 1, validated.startDay),
+        endDate: new Date(validated.endYear, validated.endMonth - 1, validated.endDay),
+        shiLei: validated.shiLei,
+        limit: validated.limit,
+        minScore: validated.minScore,
+        includeDirection: validated.includeDirection,
+        excludeJieQiDay: validated.excludeJieQiDay,
+        excludeSuiPo: validated.excludeSuiPo,
+        excludeYuePo: validated.excludeYuePo,
+        panType: validated.panType,
+        panStyle: validated.panStyle,
+        zhiRunMethod: validated.zhiRunMethod,
+      });
+
+      // 使用渲染器生成输出
+      const { renderQimenZeRiText } = await import("./output/qimenTextRenderer");
+      const text = renderQimenZeRiText(results, validated.shiLei);
 
       return {
         content: [
