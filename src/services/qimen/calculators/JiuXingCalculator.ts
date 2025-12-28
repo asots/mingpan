@@ -146,17 +146,7 @@ export class JiuXingCalculator {
       gongXing[gong] = xing;
     }
 
-    // 天禽星寄坤二（随天芮）
-    // 找到天芮所在的宫位
-    let ruiGong: GongWei = 2;
-    for (const [gong, xing] of Object.entries(gongXing)) {
-      if (xing === '芮') {
-        ruiGong = parseInt(gong) as GongWei;
-        break;
-      }
-    }
-
-    // 中宫放天禽，但实际显示时天禽随天芮
+    // 天禽星寄中宫，实际显示时随天芮
     gongXing[5] = '禽';
 
     return gongXing;

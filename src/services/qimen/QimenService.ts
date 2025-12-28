@@ -46,9 +46,54 @@ export class QimenService {
   }
 
   /**
+   * 验证输入参数
+   */
+  private validateInput(input: QimenInput): void {
+    // 验证年份
+    if (!Number.isInteger(input.year) || input.year < 1900 || input.year > 2100) {
+      throw new Error(`年份必须在 1900-2100 之间，当前值: ${input.year}`);
+    }
+
+    // 验证月份
+    if (!Number.isInteger(input.month) || input.month < 1 || input.month > 12) {
+      throw new Error(`月份必须在 1-12 之间，当前值: ${input.month}`);
+    }
+
+    // 验证日期
+    if (!Number.isInteger(input.day) || input.day < 1 || input.day > 31) {
+      throw new Error(`日期必须在 1-31 之间，当前值: ${input.day}`);
+    }
+
+    // 验证小时
+    if (!Number.isInteger(input.hour) || input.hour < 0 || input.hour > 23) {
+      throw new Error(`小时必须在 0-23 之间，当前值: ${input.hour}`);
+    }
+
+    // 验证分钟（可选）
+    if (input.minute !== undefined) {
+      if (!Number.isInteger(input.minute) || input.minute < 0 || input.minute > 59) {
+        throw new Error(`分钟必须在 0-59 之间，当前值: ${input.minute}`);
+      }
+    }
+
+    // 验证盘类型（可选）
+    if (input.panType !== undefined && input.panType !== '时盘' && input.panType !== '日盘') {
+      throw new Error(`盘类型必须是 '时盘' 或 '日盘'，当前值: ${input.panType}`);
+    }
+
+    // 验证置闰方法（可选）
+    if (input.zhiRunMethod !== undefined && input.zhiRunMethod !== 'chaibu' && input.zhiRunMethod !== 'maoshan') {
+      throw new Error(`置闰方法必须是 'chaibu' 或 'maoshan'，当前值: ${input.zhiRunMethod}`);
+    }
+  }
+
+  /**
    * 计算奇门遁甲盘
    */
   calculate(input: QimenInput): QimenResult {
+    // 输入参数验证
+    this.validateInput(input);
+
     const panType: PanType = input.panType || '时盘';
     const zhiRunMethod: ZhiRunMethod = input.zhiRunMethod || 'chaibu';
 
@@ -121,8 +166,9 @@ export class QimenService {
     );
 
     // 11. 计算日干/时干落宫
-    const dayGanGong = this.findGanGong(siZhu.dayGan, tianPanResult.ganGong);
-    const hourGanGong = this.findGanGong(siZhu.hourGan, tianPanResult.ganGong);
+    // 注意：甲遁于六仪，需根据各自干支的旬首确定
+    const dayGanGong = this.findGanGong(siZhu.dayGan, siZhu.dayGanZhi, tianPanResult.ganGong);
+    const hourGanGong = this.findGanGong(siZhu.hourGan, siZhu.hourGanZhi, tianPanResult.ganGong);
 
     // 12. 计算格局
     const geJu = GeJuCalculator.calculate(
@@ -297,8 +343,9 @@ export class QimenService {
       const gong = g as GongWei;
 
       // 检查是否空亡（根据地支判断）
-      const gongDiZhi = this.getGongDiZhi(gong);
-      const isKong = kongWang.includes(gongDiZhi);
+      // 某些宫位对应两个地支，只要其中一个在空亡列表中即为空亡
+      const gongDiZhiList = this.getGongDiZhiList(gong);
+      const isKong = gongDiZhiList.some(dz => kongWang.includes(dz));
 
       // 检查是否马星
       const isMa = gong === maGong;
@@ -321,19 +368,20 @@ export class QimenService {
   }
 
   /**
-   * 获取宫位对应的地支
+   * 获取宫位对应的所有地支
+   * 某些宫位对应两个地支（坤、巽、乾、艮），需要全部返回
    */
-  private getGongDiZhi(gong: GongWei): DiZhi {
-    const gongDiZhiMap: Record<GongWei, DiZhi> = {
-      1: '子',
-      2: '未', // 坤宫对应未申，取未
-      3: '卯',
-      4: '辰', // 巽宫对应辰巳，取辰
-      5: '未', // 中宫寄坤二
-      6: '戌', // 乾宫对应戌亥，取戌
-      7: '酉',
-      8: '丑', // 艮宫对应丑寅，取丑
-      9: '午',
+  private getGongDiZhiList(gong: GongWei): DiZhi[] {
+    const gongDiZhiMap: Record<GongWei, DiZhi[]> = {
+      1: ['子'],         // 坎宫
+      2: ['未', '申'],   // 坤宫
+      3: ['卯'],         // 震宫
+      4: ['辰', '巳'],   // 巽宫
+      5: ['未', '申'],   // 中宫寄坤二
+      6: ['戌', '亥'],   // 乾宫
+      7: ['酉'],         // 兑宫
+      8: ['丑', '寅'],   // 艮宫
+      9: ['午'],         // 离宫
     };
     return gongDiZhiMap[gong];
   }
@@ -341,14 +389,18 @@ export class QimenService {
   /**
    * 根据天干找落宫
    * 注意：甲遁于六仪之下，需要根据旬首找对应的六仪
+   *
+   * @param gan - 天干
+   * @param ganZhi - 干支（用于确定甲的旬首）
+   * @param ganGong - 天干落宫映射
    */
-  private findGanGong(gan: TianGan, ganGong: Record<TianGan, GongWei>): GongWei {
+  private findGanGong(gan: TianGan, ganZhi: string, ganGong: Record<TianGan, GongWei>): GongWei {
     let actualGan = gan;
 
-    // 甲遁于六仪之下，需要根据日/时干支找旬首
+    // 甲遁于六仪之下，需要根据干支的旬首找对应的六仪
     if (gan === '甲') {
-      // 甲遁戊，直接用戊找落宫
-      actualGan = '戊';
+      const xunShou = getXunShou(ganZhi);
+      actualGan = getLiuYiGan(xunShou);
     }
 
     const gong = ganGong[actualGan];

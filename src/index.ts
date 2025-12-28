@@ -852,15 +852,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "qimen_basic") {
       const validated = QimenBasicSchema.parse(args);
+      const normalized = normalizeBirthInfo(validated);
 
       const qimenService = new QimenService();
       const result = qimenService.calculate({
-        year: validated.year,
-        month: validated.month,
-        day: validated.day,
-        hour: validated.hour,
-        minute: validated.minute,
-        isLunar: validated.isLunar,
+        year: normalized.year,
+        month: normalized.month,
+        day: normalized.day,
+        hour: normalized.hour,
+        minute: normalized.minute,
+        isLunar: false,  // Already converted to solar if needed
         panType: validated.panType,
         zhiRunMethod: validated.zhiRunMethod,
       });

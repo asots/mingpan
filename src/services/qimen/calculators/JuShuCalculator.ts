@@ -106,10 +106,16 @@ export class JuShuCalculator {
    * - 节气交节后 11-15 天为下元
    */
   private static calculateYuanMaoshan(jieQiDate: Date, currentDate: Date): YuanType {
-    const diffTime = currentDate.getTime() - jieQiDate.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1; // 交节当天算第1天
+    // 使用 UTC 日期避免时区和时间精度问题
+    const jieQiDay = Date.UTC(jieQiDate.getFullYear(), jieQiDate.getMonth(), jieQiDate.getDate());
+    const currentDay = Date.UTC(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate());
 
-    if (diffDays <= 5) {
+    const diffDays = Math.floor((currentDay - jieQiDay) / (1000 * 60 * 60 * 24)) + 1; // 交节当天算第1天
+
+    // 处理边界情况
+    if (diffDays < 1) {
+      return '上元'; // 节气当天之前，默认上元
+    } else if (diffDays <= 5) {
       return '上元';
     } else if (diffDays <= 10) {
       return '中元';
